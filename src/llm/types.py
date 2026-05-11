@@ -15,6 +15,7 @@ class Message:
     metadata: dict = field(default_factory=dict)
     tool_calls: list[dict[str, Any]] | None = None
     tool_call_id: str | None = None
+    reasoning_content: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"role": self.role, "content": self.content}
@@ -22,4 +23,6 @@ class Message:
             d["tool_calls"] = self.tool_calls
         if self.tool_call_id:
             d["tool_call_id"] = self.tool_call_id
+        if self.reasoning_content is not None:
+            d["reasoning_content"] = self.reasoning_content
         return d

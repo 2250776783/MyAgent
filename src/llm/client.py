@@ -17,6 +17,11 @@ from src.llm.types import Message
 logger = logging.getLogger(__name__)
 
 
+def _clean_surrogates(text: str) -> str:
+    """移除非法代理字符（surrogate pairs）。"""
+    return text.encode("utf-8", errors="replace").decode("utf-8")
+
+
 class LLMError(Exception):
     pass
 
@@ -74,7 +79,12 @@ class LLMClient:
                 response = self._client.chat.completions.create(**kwargs)
                 choice = response.choices[0]
                 msg = choice.message
-                result = Message(role=msg.role or "assistant", content=msg.content or "")
+                clean = _clean_surrogates(msg.content or "")
+                result = Message(role=msg.role or "assistant", content=clean)
+                # DeepSeek 思考模式：捕获 reasoning_content 以便后续回传
+                extra = choice.message.model_extra or {}
+                if "reasoning_content" in extra:
+                    result.reasoning_content = _clean_surrogates(extra["reasoning_content"])
                 if msg.tool_calls:
                     result.tool_calls = [
                         {
@@ -82,7 +92,7 @@ class LLMClient:
                             "type": "function",
                             "function": {
                                 "name": tc.function.name,
-                                "arguments": tc.function.arguments,
+                                "arguments": _clean_surrogates(tc.function.arguments),
                             },
                         }
                         for tc in msg.tool_calls
@@ -129,7 +139,7 @@ class LLMClient:
                 for chunk in stream:
                     delta = chunk.choices[0].delta if chunk.choices else None  # type: ignore[union-attr]
                     if delta and delta.content:
-                        yield Message(role="assistant", content=delta.content)
+                        yield Message(role="assistant", content=_clean_surrogates(delta.content))
                 return
             except (APIError, APITimeoutError, RateLimitError) as e:
                 last_error = e
