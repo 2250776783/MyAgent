@@ -1,0 +1,14 @@
+Large Language Model (LLM)
+
+A large language model (LLM) is a neural network trained on a vast amount of text for natural language processing tasks, especially language generation. LLMs can generate, summarize, translate and parse text in many contexts, and are a foundational technology behind modern chatbots.
+
+As of 2024, the largest and most capable LLMs are all based on transformer architectures, which, according to the 2017 paper "Attention Is All You Need", can be more efficient and parallelizable than earlier statistical and recurrent neural network models.
+
+Key developments:
+- 2017: Transformer architecture introduced
+- 2020: GPT-3 released by OpenAI
+- 2022: ChatGPT launched
+- 2023: GPT-4, open-source LLMs emerge
+- 2024-2026: Multimodal models, reasoning models
+
+LLMs are used for text generation, code generation, translation, summarization, and question answering. Benchmarks evaluate reasoning, factual accuracy, alignment, and safety.

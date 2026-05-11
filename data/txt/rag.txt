@@ -1,0 +1,18 @@
+Retrieval-augmented generation (RAG)
+
+Retrieval-augmented generation (RAG) is a technique that enables large language models (LLMs) to retrieve and incorporate new information from external data sources. With RAG, LLMs first refer to a specified set of documents, then respond to user queries. These documents supplement information from the LLM's pre-existing training data.
+
+RAG improves large language models by incorporating information retrieval before generating responses. Unlike LLMs that rely on static training data, RAG pulls relevant text from databases, uploaded documents, or web sources. This method helps reduce AI hallucinations.
+
+The term RAG was first introduced in a 2020 research paper.
+
+Key stages of RAG:
+1. Document loading and parsing
+2. Text chunking
+3. Embedding / vectorization
+4. Vector retrieval
+5. Answer generation with LLM
+
+RAG is used in manufacturing, customer service, knowledge base QA, and document analysis.
+
+Challenges: RAG does not prevent all hallucinations. RAG poisoning occurs when the system retrieves factually correct but misleading sources.

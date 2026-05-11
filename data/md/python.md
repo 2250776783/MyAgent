@@ -1,0 +1,3 @@
+# Python Programming Language
+
+Python is a high-level, general-purpose programming language that emphasizes code readability and simplicity. Guido van Rossum began working on Python in the late 1980s. Python 3.0 was released in 2008. Python supports multiple programming paradigms including object-oriented, procedural, functional, and structured programming. It has gained widespread use in the machine learning community. Key features include dynamic typing, comprehensive standard library, and large ecosystem of third-party packages.

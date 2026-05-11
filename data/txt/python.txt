@@ -1,0 +1,13 @@
+Python (programming language)
+
+Python is a high-level, general-purpose programming language that emphasizes code readability, simplicity, and ease-of-writing with the use of significant indentation, "plain English" naming, an extensive standard library, and garbage collection.
+
+Guido van Rossum began working on Python in the late 1980s as a successor to the ABC programming language. Python 3.0, released in 2008, was a major revision. Python 3.15 is currently in development.
+
+Python supports multiple programming paradigms including object-oriented, procedural, functional, and structured programming. It has gained widespread use in the machine learning community and is widely taught as an introductory programming language.
+
+Key features:
+- Dynamic typing with optional static typing (PEP 484)
+- Comprehensive standard library ("batteries included")
+- Large ecosystem of third-party packages via PyPI
+- Used extensively in data science, web development, automation, and AI
