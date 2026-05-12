@@ -6,5 +6,6 @@
 from .system.current_time import CurrentTimeTool
 from .code.calculator import CalculatorTool
 from .web.search import WebSearchTool
+from .rag.retriever_tool import RetrieverTool
 
-__all__ = ["CurrentTimeTool", "CalculatorTool", "WebSearchTool"]
+__all__ = ["CurrentTimeTool", "CalculatorTool", "WebSearchTool", "RetrieverTool"]

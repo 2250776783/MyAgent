@@ -11,7 +11,7 @@ import re
 
 from src.agent.tools.base import BaseTool, ToolRegistry
 from src.llm import LLMClient, Message
-from src.agent.tools import ToolExecutor
+from src.agent.tools.runtime import ToolExecutor
 
 logger = logging.getLogger(__name__)
 
