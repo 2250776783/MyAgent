@@ -3,15 +3,15 @@
 import pytest
 
 from src.agent.tools import CalculatorTool, CurrentTimeTool
-from src.agent.tools.base import BaseTool, ToolRegistry
+from src.agent.tools.base import BaseTool, ToolRegistry, ToolOutput, ToolNotFoundError
 
 
 class SimpleTool(BaseTool):
     name: str = "test_tool"
     description: str = "一个测试工具"
 
-    def run(self, **kwargs: str) -> str:
-        return f"executed with {kwargs}"
+    def _run(self, **kwargs: str) -> ToolOutput:
+        return ToolOutput(success=True, output=f"executed with {kwargs}")
 
 
 class TestBaseTool:
@@ -33,7 +33,7 @@ class TestToolRegistry:
 
     def test_get_nonexistent_raises(self) -> None:
         registry = ToolRegistry()
-        with pytest.raises(KeyError):
+        with pytest.raises(ToolNotFoundError):
             registry.get("nonexistent")
 
     def test_list_tools(self) -> None:
@@ -62,7 +62,7 @@ class TestCurrentTimeTool:
     def test_run_returns_time_string(self) -> None:
         tool = CurrentTimeTool()
         result = tool.run()
-        assert len(result) == 19  # "YYYY-MM-DD HH:MM:SS"
+        assert len(result.output) == 19  # "YYYY-MM-DD HH:MM:SS"
 
     def test_name_and_description(self) -> None:
         tool = CurrentTimeTool()
@@ -73,30 +73,30 @@ class TestCurrentTimeTool:
 class TestCalculatorTool:
     def test_simple_addition(self) -> None:
         tool = CalculatorTool()
-        assert tool.run(expression="1+2") == "3"
+        assert tool.run(expression="1+2").output == "3"
 
     def test_complex_expression(self) -> None:
         tool = CalculatorTool()
-        assert tool.run(expression="(3+5)*2") == "16"
+        assert tool.run(expression="(3+5)*2").output == "16"
 
     def test_illegal_chars(self) -> None:
         tool = CalculatorTool()
         result = tool.run(expression="1+__import__('os')")
-        assert "错误" in result
+        assert not result.success
 
     def test_division(self) -> None:
         tool = CalculatorTool()
-        assert float(tool.run(expression="10/3")) == pytest.approx(3.333, rel=1e-2)
+        assert float(tool.run(expression="10/3").output) == pytest.approx(3.333, rel=1e-2)
 
     def test_divide_by_zero(self) -> None:
         tool = CalculatorTool()
         result = tool.run(expression="1/0")
-        assert "错误" in result
+        assert not result.success
 
     def test_empty_expression(self) -> None:
         tool = CalculatorTool()
         result = tool.run(expression="  ")
-        assert "错误" in result
+        assert not result.success
 
     def test_name_and_description(self) -> None:
         tool = CalculatorTool()

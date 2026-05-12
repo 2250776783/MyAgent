@@ -7,7 +7,7 @@
 import logging
 import time
 from collections.abc import Generator
-from typing import Any
+from typing import Any, Dict
 
 from openai import APIError, APITimeoutError, OpenAI, RateLimitError
 
@@ -112,6 +112,34 @@ class LLMClient:
         raise LLMError(
             f"LLM call failed after {self.max_retries} retries"
         ) from last_error
+    
+    def think(self, messages: list[Dict[str, str]], temperature: float = 0):
+        """
+        调用大模型进行思考，并返回其响应
+        """
+
+        print("🤔 正在调用 {self.model} 大模型正在思考...")
+        try:
+            response = self._client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
+                stream=True,
+            )
+
+            # 处理流式响应
+            print("💡 大模型响应成功:")
+            collected_content = []
+            for chunk in response:
+                content = chunk.choices[0].delta.content or ""
+                print(content, end="", flush=True)
+                collected_content.append(content)
+            print()  # 换行
+            return "".join(collected_content)
+        
+        except Exception as e:
+            print(f"调用大模型思考时发生错误: {e}")
+            return None
 
     def chat_stream(
         self,

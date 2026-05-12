@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.agent import Agent
-from src.agent.tools.base import BaseTool
+from src.agent.tools.base import BaseTool, ToolOutput
 from src.llm import Message
 
 
@@ -13,8 +13,8 @@ class EchoTool(BaseTool):
     name: str = "echo"
     description: str = "回显输入"
 
-    def run(self, **kwargs: str) -> str:
-        return f"echo: {kwargs.get('text', '')}"
+    def _run(self, **kwargs: str) -> ToolOutput:
+        return ToolOutput(success=True, output=f"echo: {kwargs.get('text', '')}")
 
 
 def make_fake_response(content: str = "", tool_calls: list | None = None) -> Message:
@@ -99,7 +99,7 @@ class TestAgentChat:
             name: str = "broken"
             description: str = "会出错的工具"
 
-            def run(self, **kwargs: str) -> str:
+            def _run(self, **kwargs: str) -> ToolOutput:
                 raise ValueError("出错了")
 
         tool_call_response = make_fake_response(

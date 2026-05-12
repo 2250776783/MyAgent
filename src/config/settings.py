@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     embed_base_url: str = Field(default="", alias="EMBED_BASE_URL")
     embed_model: str = "text-embedding-3-small"
 
+    serpapi_api_key: str = Field(default="", alias="SERPAPI_API_KEY")
+
     chroma_path: str = "./chroma_db"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
