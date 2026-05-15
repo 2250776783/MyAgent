@@ -177,3 +177,58 @@ class TestAgentReset:
         agent.reset()
         assert len(agent.messages) == 1
         assert agent.messages[0].role == "system"
+
+
+class TestAgentReActFallback:
+    """测试文本 ReAct 回退模式。"""
+
+    def test_react_tool_call(self) -> None:
+        """LLM 返回 Thought/Action 文本，工具执行后返回最终答案。"""
+        llm = MagicMock()
+        tool = EchoTool()
+        react_response = make_fake_response(
+            "Thought: 需要回显输入\nAction: EchoTool[text=hello]"
+        )
+        final_response = make_fake_response("回显结果：echo: hello")
+        llm.chat.side_effect = [react_response, final_response]
+
+        agent = Agent(llm=llm, tools=[tool])
+        result = agent.chat("帮我回显 hello")
+        assert result == "回显结果：echo: hello"
+
+    def test_react_finish(self) -> None:
+        """LLM 返回 Finish 直接结束。"""
+        llm = MagicMock()
+        llm.chat.return_value = make_fake_response(
+            "Thought: 已准备好答案\nAction: Finish[答案是42]"
+        )
+        agent = Agent(llm=llm)
+        result = agent.chat("答案是什么")
+        assert result == "答案是42"
+
+    def test_react_invalid_action(self) -> None:
+        """无效的 Action 格式不崩溃，继续循环。"""
+        llm = MagicMock()
+        tool = EchoTool()
+        bad_action = make_fake_response(
+            "Thought: 思考中\nAction: 不合法格式"
+        )
+        final_response = make_fake_response("最终答案")
+        llm.chat.side_effect = [bad_action, final_response]
+
+        agent = Agent(llm=llm, tools=[tool])
+        result = agent.chat("测试")
+        assert result == "最终答案"
+
+    def test_react_tool_not_found(self) -> None:
+        """调用了未注册的工具，返回错误信息。"""
+        llm = MagicMock()
+        react_response = make_fake_response(
+            "Thought: 需要查询\nAction: NonExistentTool[input]"
+        )
+        final_response = make_fake_response("工具不存在")
+        llm.chat.side_effect = [react_response, final_response]
+
+        agent = Agent(llm=llm)
+        result = agent.chat("测试")
+        assert result == "工具不存在"
