@@ -30,3 +30,7 @@ notebooks/.ipynb_checkpoints/
 # 临时文件
 *.log
 tmp/
+
+# Web 前端
+web/node_modules/
+web/dist/
