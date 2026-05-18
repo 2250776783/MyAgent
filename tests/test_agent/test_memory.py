@@ -240,7 +240,7 @@ class TestAgentMemoryIntegration:
         assert result == "你好"
 
     def test_chat_calls_on_chat_start(self) -> None:
-        """chat() 调用 memory.on_chat_start。"""
+        """chat() 通过 ContextManager 触发记忆检索。"""
         llm = MagicMock()
         llm.chat.return_value = Message(role="assistant", content="你好")
         memory = MagicMock()
@@ -250,7 +250,8 @@ class TestAgentMemoryIntegration:
         agent = Agent(llm=llm, memory=memory)
         agent.chat("hi")
 
-        memory.on_chat_start.assert_called_once_with("hi")
+        # memory.on_chat_start 通过 MemoryContext.retrieve 间接调用
+        memory.on_chat_start.assert_called_once()
 
     def test_chat_calls_on_chat_end(self) -> None:
         """chat() 调用 memory.on_chat_end。"""
@@ -279,7 +280,7 @@ class TestAgentMemoryIntegration:
         memory.trim_messages.assert_called_once()
 
     def test_chat_injects_memory_context(self) -> None:
-        """on_chat_start 返回记忆内容时注入到 system prompt。"""
+        """MemoryContext 检索到的记忆注入到 system prompt。"""
         llm = MagicMock()
         llm.chat.return_value = Message(role="assistant", content="回答")
         memory = MagicMock()
@@ -287,7 +288,8 @@ class TestAgentMemoryIntegration:
         memory.trim_messages.side_effect = lambda msgs: msgs
 
         agent = Agent(llm=llm, memory=memory, system_prompt="你是一个助手")
-        agent.chat("hi")
+        # 查询需要 >5 字符以激活 MEMORY 上下文类型
+        agent.chat("帮我查一下订单")
 
         sys_msg = agent.messages[0]
         assert "用户喜欢Python" in sys_msg.content
@@ -305,7 +307,7 @@ class TestAgentMemoryIntegration:
         memory.on_reset.assert_called_once()
 
     def test_chat_stream_calls_memory(self) -> None:
-        """chat_stream() 调用 memory 生命周期方法。"""
+        """chat_stream() 通过 ContextManager 触发记忆生命周期。"""
         llm = MagicMock()
         llm.chat.return_value = Message(role="assistant", content="流式回答")
         memory = MagicMock()
@@ -315,6 +317,6 @@ class TestAgentMemoryIntegration:
         agent = Agent(llm=llm, memory=memory)
         list(agent.chat_stream("hi"))
 
-        memory.on_chat_start.assert_called_once_with("hi")
+        memory.on_chat_start.assert_called_once()
         memory.on_chat_end.assert_called_once()
         memory.trim_messages.assert_called_once()

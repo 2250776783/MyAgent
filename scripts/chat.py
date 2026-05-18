@@ -10,7 +10,12 @@ Usage:
 import argparse
 import logging
 import sys
+from pathlib import Path
 
+# 确保项目根目录在 sys.path 中（src layout）
+_root = Path(__file__).resolve().parent.parent
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
 
 from src.agent import Agent
 from src.agent.tools import CalculatorTool, CurrentTimeTool

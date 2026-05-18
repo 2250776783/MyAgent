@@ -11,6 +11,7 @@ import re
 from collections.abc import Generator
 from typing import Any
 
+from src.agent.context import ContextManager
 from src.agent.memory import MemoryManager
 from src.agent.tools.base import BaseTool, ToolRegistry
 from src.llm import LLMClient, Message
@@ -36,7 +37,8 @@ class Agent:
         tools: 可选工具列表
         system_prompt: 系统提示词
         max_iterations: 最大循环次数
-        memory: 可选记忆系统
+        memory: 可选记忆系统（传给 ContextManager）
+        context_manager: 可选上下文管理器（优先级高于 memory）
     """
 
     def __init__(
@@ -46,6 +48,7 @@ class Agent:
         system_prompt: str = _SYSTEM_PROMPT,
         max_iterations: int = 10,
         memory: MemoryManager | None = None,
+        context_manager: ContextManager | None = None,
     ) -> None:
         self.llm = llm
         self.max_iterations = max_iterations
@@ -56,8 +59,9 @@ class Agent:
         if tools:
             for tool in tools:
                 self.tool_registry.register(tool)
-        if memory:
-            memory.start_session()
+
+        self.context = context_manager or ContextManager(llm=llm, memory=memory)
+        self.context.start_session()
 
     # ------------------------------------------------------------------
     # 公开接口
@@ -68,15 +72,18 @@ class Agent:
 
         内部 ReAct 循环：function calling 优先，文本 ReAct 回退。
         """
-        # 记忆注入 + 窗口裁剪
-        if self.memory:
-            memory_ctx = self.memory.on_chat_start(message)
-            if memory_ctx:
-                self.messages[0] = Message(
-                    role="system",
-                    content=f"{self._base_system_prompt}\n\n{memory_ctx}",
-                )
-            self.messages = self.memory.trim_messages(self.messages)
+        # 上下文系统：记忆检索 + 系统提示增强
+        self.context.on_chat_start(message)
+        augmentation = self.context.build_system_augmentation(message)
+        if augmentation:
+            self.messages[0] = Message(
+                role="system",
+                content=f"{self._base_system_prompt}\n\n{augmentation}",
+            )
+
+        trimmed = self.context.trim_messages(self.messages)
+        if trimmed is not self.messages:
+            self.messages = trimmed
 
         self.messages.append(Message(role="user", content=message))
 
@@ -96,31 +103,31 @@ class Agent:
                     self.messages.append(Message(role="tool", content="[已完成]"))
                     m = re.search(r"Finish\[(.*)\]$", action)
                     result = m.group(1) if m else action
-                    if self.memory:
-                        self.memory.on_chat_end(self.messages)
+                    self.context.on_chat_end(self.messages)
                     return result
                 self._handle_react(response)
             else:
                 self.messages.append(response)
-                if self.memory:
-                    self.memory.on_chat_end(self.messages)
+                self.context.on_chat_end(self.messages)
                 return response.content
 
-        if self.memory:
-            self.memory.on_chat_end(self.messages)
+        self.context.on_chat_end(self.messages)
         return "已达最大迭代次数，请简化问题或重试。"
 
     def chat_stream(self, message: str) -> Generator[str, None, None]:
         """流式处理用户消息，逐块返回文本。"""
-        # 记忆注入 + 窗口裁剪
-        if self.memory:
-            memory_ctx = self.memory.on_chat_start(message)
-            if memory_ctx:
-                self.messages[0] = Message(
-                    role="system",
-                    content=f"{self._base_system_prompt}\n\n{memory_ctx}",
-                )
-            self.messages = self.memory.trim_messages(self.messages)
+        # 上下文系统：记忆检索 + 系统提示增强
+        self.context.on_chat_start(message)
+        augmentation = self.context.build_system_augmentation(message)
+        if augmentation:
+            self.messages[0] = Message(
+                role="system",
+                content=f"{self._base_system_prompt}\n\n{augmentation}",
+            )
+
+        trimmed = self.context.trim_messages(self.messages)
+        if trimmed is not self.messages:
+            self.messages = trimmed
 
         self.messages.append(Message(role="user", content=message))
         tools_list = self.tool_registry.to_openai_tools() or None
@@ -141,15 +148,13 @@ class Agent:
                     self.messages.append(Message(role="tool", content="[已完成]"))
                     m = re.search(r"Finish\[(.*)\]$", action)
                     result = m.group(1) if m else action
-                    if self.memory:
-                        self.memory.on_chat_end(self.messages)
+                    self.context.on_chat_end(self.messages)
                     yield result
                     return
                 self._handle_react(response)
             else:
                 self.messages.append(response)
-                if self.memory:
-                    self.memory.on_chat_end(self.messages)
+                self.context.on_chat_end(self.messages)
                 yield response.content
                 return
 
@@ -157,8 +162,7 @@ class Agent:
 
     def reset(self) -> None:
         """重置对话历史（保留 system prompt）。"""
-        if self.memory:
-            self.memory.on_reset()
+        self.context.on_reset()
         self.messages = [Message(role="system", content=self._base_system_prompt)]
 
     # ------------------------------------------------------------------
@@ -169,7 +173,14 @@ class Agent:
         """处理 function calling 工具调用。"""
         self.messages.append(response)
         for tc in response.tool_calls:
+            tool_name = tc["function"]["name"]
+            args = json.loads(tc["function"]["arguments"])
+            call_id = self.context.on_tool_call(tool_name, args)
+
             result = self._execute_tool_call(tc)
+            success = not result.startswith("工具执行错误")
+            self.context.on_tool_result(call_id, result, success, 0.0)
+
             self.messages.append(
                 Message(
                     role="tool",
@@ -189,7 +200,11 @@ class Agent:
         if not tool_name:
             return
 
+        call_id = self.context.on_tool_call(tool_name, {"input": tool_input})
         result = self._execute_tool_by_name(tool_name, tool_input)
+        success = not result.startswith("工具执行错误")
+        self.context.on_tool_result(call_id, result, success, 0.0)
+
         self.messages.append(
             Message(role="tool", content=str(result))
         )
