@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 个人问答助手项目，目标是通过实践学习 **RAG** 和 **Agent** 相关知识。
 
-**当前状态**: 核心功能已实现。Agent Context System (`src/agent/context/`) + 记忆系统 (`src/agent/memory/`) + 企业级日志系统 (`src/logging/`) 已完成，规划模块 (`src/agent/planner/`) 仍为待实现。共 140+ 个测试。
+**当前状态**: 核心功能已实现。Agent Context System + 分层记忆系统 + 企业级日志系统已全部完成，规划模块 (`src/agent/planner/`) 仍为待实现。共 140+ 个测试（15 个测试文件）。
 
 ## 技术栈
 
@@ -25,24 +25,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # 启动 PostgreSQL + Redis
-docker compose -f docker/docker-compose.yml up -d
+docker compose up -d
 
 # 检查状态
-docker compose -f docker/docker-compose.yml ps
+docker compose ps
 
 # 验证全套基础设施
 uv run python scripts/verify_infra.py
 
 # 停止
-docker compose -f docker/docker-compose.yml stop
+docker compose stop
 
 # 完全重置（删除数据卷）
-docker compose -f docker/docker-compose.yml down -v
+docker compose down -v
 ```
 
 ## 环境变量
 
-`.env` 文件配置（pydantic-settings 自动读取，不注入 `os.environ`）:
+`.env` 文件配置（pydantic-settings 自动读取项目根目录 `.env`，不注入 `os.environ`）:
+注意：Docker Compose 也读取项目根目录 `.env`；`docker/.env.example` 可作为参考。
 
 | 变量 | 用途 |
 |------|------|
@@ -157,8 +158,22 @@ src/
 │   ├── app.py            # FastAPI app factory + CORS + TTL 清理
 │   ├── deps.py           # FastAPI DI（session、agent 工厂）
 │   ├── models/           # Pydantic 请求/响应模型
-│   ├── routers/          # API 路由（chat/health/sessions）
+│   ├── routers/          # API 路由（chat.py / health.py / sessions.py / ws.py）
 │   └── sessions/         # SessionStore（内存 Session 管理 + TTL）
+├── logging/              # 企业级日志系统（AI Agent 可观测性）
+│   ├── adapter.py        # LoggerAdapter / LoguruAdapter / NullAdapter
+│   ├── config.py         # LogConfig（level / format / output）
+│   ├── pipeline.py       # LogPipeline（Processor → Filter → Sink）
+│   ├── event.py          # EventBus 事件总线
+│   ├── schema.py         # 日志事件 Schema
+│   ├── processors.py     # Enricher / Sanitizer
+│   ├── filters.py        # LevelFilter
+│   ├── sinks.py          # ConsoleSink / FileSink
+│   ├── context.py        # contextvars 隐式传播
+│   ├── agent/            # Agent 域日志（llm/tool/memory/event）
+│   ├── exporters/        # 导出器（Elastic / Loki / OpenTelemetry）
+│   ├── middleware/       # FastAPI 中间件
+│   └── replay/           # 日志回放（Recorder / Player）
 ├── agent/
 │   ├── agent.py          # Agent 主类（同步 ReAct 循环）
 │   ├── async_agent.py    # AsyncAgent（异步 ReAct 循环，run_in_executor 执行工具）
@@ -179,9 +194,9 @@ scripts/
 ├── ingest.py             # RAG 数据摄入
 └── query.py              # RAG 知识库查询
 tests/
-├── test_rag/             # RAG 子模块测试
-├── test_agent/           # Agent + 工具 + 记忆测试
-└── 共 12 个测试文件
+├── test_rag/             # RAG 子模块测试（5 文件）
+├── test_agent/           # Agent + 工具 + 记忆测试（4 文件）
+├── test_logging/         # 日志系统测试（6 文件）
 web/                       # React 前端
 ├── package.json           # Node.js 依赖
 ├── vite.config.ts         # Vite 配置（含 /api 代理）
@@ -369,6 +384,23 @@ Agent.chat()
   from src.agent.tools import CalculatorTool, CurrentTimeTool, WebSearchTool
   from src.agent.tools.capabilities import RetrieverTool
   from src.agent.tools.runtime import ToolExecutor
+  ```
+
+### 日志系统 (`src/logging/`)
+- **架构**: Adapter 接口解耦 + contextvars 隐式传播 + Pipeline（Processor→Filter→Sink）+ EventBus
+- **初始化**: `setup_logging()` 在应用启动时调用一次，返回 `LoggerAdapter`
+- **用法**:
+  ```python
+  from src.logging import setup_logging
+  adapter = setup_logging()
+  adapter.info("system.event", "服务启动", version="1.0")
+  ```
+- **Agent 域日志**: 通过 `src/logging/agent/` 下的专用 logger 记录 LLM 调用、工具执行、记忆操作等事件
+- **导出器**: `Exporters` 支持 Elasticsearch、Loki、OpenTelemetry 导出（`src/logging/exporters/`）
+- **回放**: `Replay` 模块支持日志录制和回放，用于调试和审计（`src/logging/replay/`）
+- 导入路径：
+  ```python
+  from src.logging import setup_logging, get_default_adapter, shutdown_logging
   ```
 
 ### RAG 流程

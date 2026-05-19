@@ -27,7 +27,7 @@ services:
     volumes:
       - myagent-pgdata:/var/lib/postgresql/data
       # 初始化脚本在首次启动时自动按文件名排序执行
-      - ./postgres/init:/docker-entrypoint-initdb.d
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-myagent} -d ${POSTGRES_DB:-agent_memory}"]
       interval: 10s
@@ -54,7 +54,7 @@ services:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
       - myagent-redis-data:/data
-      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
+      - ./docker/redis/redis.conf:/usr/local/etc/redis/redis.conf
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s

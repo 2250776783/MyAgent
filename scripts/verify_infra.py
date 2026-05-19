@@ -48,9 +48,10 @@ async def check_postgres() -> list[str]:
         )
         results.append(f"  [OK] pgvector v{vec}" if vec else "  [FAIL] pgvector 未安装")
 
-        tables = {r["table_name"] async for r in conn.fetch(
+        rows = await conn.fetch(
             "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"
-        )}
+        )
+        tables = {r["table_name"] for r in rows}
         expect = {"users", "sessions", "messages", "conversation_summary",
                   "long_term_memory", "tasks", "tool_calls", "memory_links", "agent_states"}
         missing = expect - tables
@@ -59,9 +60,10 @@ async def check_postgres() -> list[str]:
         else:
             results.append(f"  [OK] {len(expect)} 张表已创建")
 
+        test_vec = "[" + ",".join(["0.1"] * 1536) + "]"
         await conn.execute(
             "INSERT INTO long_term_memory (content, memory_type, embedding, importance) "
-            "VALUES ('v', 'test', '[0.1,0.2,0.3]'::vector, 0.5) ON CONFLICT DO NOTHING"
+            f"VALUES ('v', 'test', '{test_vec}'::vector, 0.5) ON CONFLICT DO NOTHING"
         )
         n = await conn.fetchval(
             "SELECT count(*) FROM long_term_memory WHERE embedding IS NOT NULL"
@@ -75,24 +77,25 @@ async def check_postgres() -> list[str]:
     return results
 
 
-async def check_redis() -> list[str]:
+def check_redis() -> list[str]:
     from src.config import settings
     results = []
     try:
-        import redis.asyncio as aioredis
-        r = aioredis.Redis(
+        import redis as syncredis
+        r = syncredis.Redis(
             host=settings.redis_host, port=settings.redis_port,
             password=settings.redis_password or None, db=settings.redis_db,
             decode_responses=True, socket_connect_timeout=5,
         )
-        assert await r.ping(), "ping failed"
-        results.append(f"  [OK] Redis v{(await r.info('server')).get('redis_version', '?')}")
+        assert r.ping(), "ping failed"
+        info = r.info("server")
+        results.append(f"  [OK] Redis v{info.get('redis_version', '?')}")
 
-        await r.set("_v", "ok", ex=10)
-        assert await r.get("_v") == "ok"
-        await r.delete("_v")
+        r.set("_v", "ok", ex=10)
+        assert r.get("_v") == "ok"
+        r.delete("_v")
         results.append("  [OK] Redis 读写正常")
-        await r.close()
+        r.close()
     except ImportError:
         results.append("  [SKIP] redis 未安装")
     except Exception as e:
