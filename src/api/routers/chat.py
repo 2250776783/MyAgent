@@ -3,16 +3,15 @@
 提供非流式 POST /api/chat 和 SSE 流式 POST /api/chat/stream 端点。
 """
 
-import logging
-
 from fastapi import APIRouter, Depends, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
 from src.api.deps import get_session
 from src.api.models.chat import ChatRequest, ChatResponse
 from src.api.sessions.store import Session
+from src.logging import get_default_adapter
 
-logger = logging.getLogger(__name__)
+_adapter = get_default_adapter()
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 
@@ -29,7 +28,11 @@ async def chat_sync(
         content = await session.agent.chat(request.message)
         return ChatResponse(session_id=session.id, content=content)
     except Exception as e:
-        logger.exception("Chat error for session %s", session.id)
+        _adapter.error(
+            "system.error",
+            f"Chat error for session {session.id}",
+            exception=str(e),
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -48,7 +51,11 @@ async def chat_stream(
                 yield {"event": "token", "data": chunk}
             yield {"event": "done", "data": session.id}
         except Exception as e:
-            logger.exception("Stream error for session %s", session.id)
+            _adapter.error(
+                "system.error",
+                f"Stream error for session {session.id}",
+                exception=str(e),
+            )
             yield {"event": "error", "data": str(e)}
 
     return EventSourceResponse(event_generator())

@@ -11,7 +11,6 @@ ContextManager/MemoryManager 通过 AsyncLLMClient.sync 获取同步 LLM 引用�
 
 import asyncio
 import json
-import logging
 import re
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
@@ -23,8 +22,8 @@ from src.agent.memory import MemoryManager
 from src.agent.tools.base import BaseTool, ToolRegistry
 from src.agent.tools.runtime import ToolExecutor
 from src.llm import AsyncLLMClient, Message
-
-logger = logging.getLogger(__name__)
+from src.logging import get_default_adapter
+from src.logging.agent import AgentLogger, ToolLogger
 
 @dataclass
 class StreamEvent:
@@ -74,6 +73,7 @@ class AsyncAgent:
         max_iterations: int = 10,
         memory: MemoryManager | None = None,
         context_manager: ContextManager | None = None,
+        logger_adapter: Any = None,
     ) -> None:
         self.llm = llm
         self.max_iterations = max_iterations
@@ -91,6 +91,13 @@ class AsyncAgent:
 
         # 使用 ToolExecutor（修复同步 Agent 绕过执行器的问题）
         self._executor = ToolExecutor(timeout=30.0, max_retries=0)
+
+        # 日志系统（支持 DI 注入，缺省使用全局默认适配器）
+        if logger_adapter is None:
+            from src.logging import get_default_adapter
+            logger_adapter = get_default_adapter()
+        self._agent_logger = AgentLogger(logger_adapter)
+        self._tool_logger = ToolLogger(logger_adapter)
 
     # ------------------------------------------------------------------
     # 公开接口
@@ -297,11 +304,19 @@ class AsyncAgent:
         for tc in response.tool_calls:
             tool_name = tc["function"]["name"]
             args = json.loads(tc["function"]["arguments"])
+
+            self._agent_logger.decision(f"调用工具 {tool_name}", reasoning=str(args)[:200])
+            self._tool_logger.log_call(tool_name, args)
             call_id = self.context.on_tool_call(tool_name, args)
 
             result = await self._execute_tool_call(tc)
             success = not result.startswith("工具执行错误")
             self.context.on_tool_result(call_id, result, success, 0.0)
+
+            if success:
+                self._tool_logger.log_result(tool_name, str(result)[:200])
+            else:
+                self._tool_logger.log_error(tool_name, str(result))
 
             self.messages.append(
                 Message(
@@ -322,10 +337,17 @@ class AsyncAgent:
         if not tool_name:
             return
 
+        self._agent_logger.decision(f"调用工具 {tool_name}", reasoning=tool_input[:200])
+        self._tool_logger.log_call(tool_name, {"input": tool_input})
         call_id = self.context.on_tool_call(tool_name, {"input": tool_input})
         result = await self._execute_tool_by_name(tool_name, tool_input)
         success = not result.startswith("工具执行错误")
         self.context.on_tool_result(call_id, result, success, 0.0)
+
+        if success:
+            self._tool_logger.log_result(tool_name, str(result)[:200])
+        else:
+            self._tool_logger.log_error(tool_name, str(result))
 
         self.messages.append(Message(role="tool", content=str(result)))
 

@@ -6,7 +6,7 @@
 """
 
 import asyncio
-import logging
+import time
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -15,8 +15,8 @@ from openai import APIError, APITimeoutError, AsyncOpenAI, RateLimitError
 from src.config import settings
 from src.llm.client import LLMClient, LLMError, _clean_surrogates
 from src.llm.types import Message
-
-logger = logging.getLogger(__name__)
+from src.logging import get_default_adapter
+from src.logging.agent import LLMLogger
 
 
 class AsyncLLMClient:
@@ -42,6 +42,7 @@ class AsyncLLMClient:
         model: str | None = None,
         max_retries: int = 3,
         retry_delay: float = 1.0,
+        llm_logger: LLMLogger | None = None,
     ) -> None:
         self.api_key = api_key or settings.llm_api_key
         raw_base_url = base_url or settings.llm_base_url
@@ -56,6 +57,7 @@ class AsyncLLMClient:
 
         self._client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
         self._sync_client: LLMClient | None = None
+        self._llm_logger = llm_logger or LLMLogger(get_default_adapter())
 
     @property
     def sync(self) -> LLMClient:
@@ -94,6 +96,10 @@ class AsyncLLMClient:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
+        dict_messages = [m.to_dict() for m in messages]
+        start = time.monotonic()
+        self._llm_logger.prompt(self.model, dict_messages, tools=tools)
+
         last_error: Exception | None = None
 
         for attempt in range(self.max_retries):
@@ -118,14 +124,27 @@ class AsyncLLMClient:
                         }
                         for tc in msg.tool_calls
                     ]
+
+                usage = getattr(response, "usage", None)
+                prompt_tokens = usage.prompt_tokens if usage else None
+                completion_tokens = usage.completion_tokens if usage else None
+                latency = (time.monotonic() - start) * 1000
+                self._llm_logger.response(
+                    self.model,
+                    clean[:200],
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    latency_ms=round(latency, 1),
+                    tool_calls=result.tool_calls,
+                )
                 return result
             except (APIError, APITimeoutError, RateLimitError) as e:
                 last_error = e
-                logger.warning(
-                    "Async LLM API error (attempt %d/%d): %s",
-                    attempt + 1,
-                    self.max_retries,
-                    e,
+                latency = (time.monotonic() - start) * 1000
+                self._llm_logger.error(
+                    self.model,
+                    str(e),
+                    latency_ms=round(latency, 1),
                 )
                 if attempt < self.max_retries - 1:
                     await asyncio.sleep(self.retry_delay * (2**attempt))
@@ -146,6 +165,8 @@ class AsyncLLMClient:
             raise ValueError("messages must not be empty")
 
         dict_messages = [m.to_dict() for m in messages]
+        start = time.monotonic()
+        self._llm_logger.prompt(self.model, dict_messages)
         last_error: Exception | None = None
 
         for attempt in range(self.max_retries):
@@ -158,18 +179,27 @@ class AsyncLLMClient:
                     top_p=top_p,
                     stream=True,
                 )
+                full_content: list[str] = []
                 async for chunk in stream:
                     delta = chunk.choices[0].delta if chunk.choices else None
                     if delta and delta.content:
-                        yield Message(role="assistant", content=_clean_surrogates(delta.content))
+                        clean = _clean_surrogates(delta.content)
+                        full_content.append(clean)
+                        yield Message(role="assistant", content=clean)
+                latency = (time.monotonic() - start) * 1000
+                self._llm_logger.response(
+                    self.model,
+                    "".join(full_content)[:200],
+                    latency_ms=round(latency, 1),
+                )
                 return
             except (APIError, APITimeoutError, RateLimitError) as e:
                 last_error = e
-                logger.warning(
-                    "Async LLM stream error (attempt %d/%d): %s",
-                    attempt + 1,
-                    self.max_retries,
-                    e,
+                latency = (time.monotonic() - start) * 1000
+                self._llm_logger.error(
+                    self.model,
+                    str(e),
+                    latency_ms=round(latency, 1),
                 )
                 if attempt < self.max_retries - 1:
                     await asyncio.sleep(self.retry_delay * (2**attempt))

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 个人问答助手项目，目标是通过实践学习 **RAG** 和 **Agent** 相关知识。
 
-**当前状态**: 核心功能已实现。Agent Context System (`src/agent/context/`) + 记忆系统 (`src/agent/memory/`) 已完成，规划模块 (`src/agent/planner/`) 仍为待实现。共 115 个测试。
+**当前状态**: 核心功能已实现。Agent Context System (`src/agent/context/`) + 记忆系统 (`src/agent/memory/`) + 企业级日志系统 (`src/logging/`) 已完成，规划模块 (`src/agent/planner/`) 仍为待实现。共 140+ 个测试。
 
 ## 技术栈
 
@@ -30,6 +30,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `EMBED_API_KEY` | 嵌入模型 API Key（可选，缺省复用 LLM Key） |
 | `EMBED_BASE_URL` | 嵌入模型 API 地址 |
 | `SERPAPI_API_KEY` | SerpApi 网页搜索 Key（可选） |
+| `LOG_LEVEL` | 日志级别（默认 `INFO`） |
+| `LOG_FORMAT` | 日志格式（`json` / `text`，默认 `json`） |
+| `LOG_OUTPUT` | 输出目标（`console` / `file` / `both`，默认 `console`） |
+| `LOG_DIR` | 日志目录（默认 `./logs`） |
+| `LOG_FILE_NAME` | 日志文件名（默认 `agent.log`） |
 
 ## 开发命令
 
@@ -48,6 +53,12 @@ uv run pytest tests/test_agent/test_memory.py -v
 
 # 运行 RAG 子模块测试
 uv run pytest tests/test_rag/ -v
+
+# 运行日志系统测试
+uv run pytest tests/test_logging/ -v
+
+# 运行日志系统测试（含覆盖率）
+uv run pytest tests/test_logging/ --cov=src/logging --cov-report=term-missing -v
 
 # 运行单测（不捕获输出，便于调试）
 uv run pytest tests/test_agent/test_agent.py -v -s
@@ -78,6 +89,9 @@ uv run python scripts/serve.py
 
 # 指定端口和自动重载
 uv run python scripts/serve.py --port 8080 --reload
+
+# 启动 Web 服务器（text 格式 + 文件日志）
+uv run python scripts/serve.py --log-format text --log-dir ./logs --log-file myagent.log
 
 # 测试 API 健康检查
 curl http://localhost:8000/api/health
@@ -119,10 +133,15 @@ src/
 ├── agent/
 │   ├── agent.py          # Agent 主类（同步 ReAct 循环）
 │   ├── async_agent.py    # AsyncAgent（异步 ReAct 循环，run_in_executor 执行工具）
-│   ├── ReflectionAgent.py # 实验性反思式 Agent
-│   ├── context/          # 上下文系统
-│   ├── tools/            # 能力域驱动的工具系统
-│   ├── memory/           # 分层记忆系统
+│   ├── ReflectionAgent.py # 实验性反思式 Agent（代码生成→自我审查→改进）
+│   ├── context/          # 上下文管理系统（9 个子模块 + Manager Facade）
+│   ├── tools/
+│   │   ├── base/         # BaseTool 抽象基类、ToolRegistry、输出/错误类型
+│   │   ├── capabilities/ # 能力域工具实现（system/code/web/rag）
+│   │   ├── runtime/      # ToolExecutor 执行器 + ToolTracer 追踪
+│   │   ├── policies/     # 安全检查与权限策略
+│   │   └── memory/       # （空占位）
+│   ├── memory/           # 分层记忆系统（10 个子模块 + Manager Facade）
 │   └── planner/          # 待实现
 scripts/
 ├── chat.py               # Agent 交互式对话（CLI）
@@ -139,16 +158,19 @@ web/                       # React 前端
 ├── tailwind.config.js
 ├── src/
 │   ├── main.tsx           # 入口
-│   ├── App.tsx            # 布局
-│   ├── api/ws.ts          # WebSocket 客户端
+│   ├── App.tsx            # 布局（含 SessionSidebar + ChatWindow）
+│   ├── api/
+│   │   ├── ws.ts          # WebSocket 客户端
+│   │   └── client.ts      # REST 客户端（session CRUD）
 │   ├── store/chat.ts      # Zustand 状态管理
 │   ├── types/chat.ts      # 类型定义
-│   └── components/        # UI 组件
+│   └── components/
 │       ├── ChatWindow.tsx
 │       ├── MessageList.tsx
 │       ├── MessageBubble.tsx
 │       ├── ToolCallCard.tsx
-│       └── InputBar.tsx
+│       ├── InputBar.tsx
+│       └── SessionSidebar.tsx
 ```
 
 ## 关键约定
@@ -174,6 +196,7 @@ web/                       # React 前端
 | WS | `/api/ws/chat` | WebSocket 实时聊天（流式事件） |
 | GET | `/api/sessions` | 活跃 session 列表 |
 | GET | `/api/sessions/{id}` | Session 详情 |
+| GET | `/api/sessions/{id}/messages` | Session 消息历史 |
 | DELETE | `/api/sessions/{id}` | 删除 session |
 
 ```bash
@@ -266,7 +289,7 @@ async for chunk in agent.chat_stream("你好"):
   agent.chat("你好")
   ```
 
-### Context System + 记忆系统生命周期
+### 上下文系统 + 记忆系统生命周期
 上下文系统是 Agent 的主要生命周期管理器，记忆系统作为其子系统协同工作：
 
 ```
@@ -297,6 +320,8 @@ Agent.chat()
 - 工具通过 Pydantic `args_schema` 声明参数，自动生成 OpenAI tool calling 格式
 - 能力域驱动：`system/`, `code/`, `web/`, `rag/` 各归各类
 - 所有 `_run()` 返回 `ToolOutput(success=True, output=str)` 或 `ToolOutput(success=False, error=str)`
+- **分层架构**：`base/`（抽象 + 注册表）→ `capabilities/`（具体实现）→ `runtime/`（执行器 + 追踪）→ `policies/`（安全检查）
+- **ToolExecutor** 提供超时控制与调用追踪（注意：同步 Agent 绕过了执行器直接调 `tool.run()`，`AsyncAgent` 已修复此问题）
 - 导入路径：
   ```python
   from src.agent.tools import CalculatorTool, CurrentTimeTool, WebSearchTool
