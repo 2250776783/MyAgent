@@ -1,0 +1,83 @@
+# ============================================================================
+# AI Agent Memory System — 基础基础设施
+# ============================================================================
+# 组件:
+#   - PostgreSQL 16 + pgvector   → 持久化存储 + 向量检索
+#   - Redis 7 + AOF               → 缓存 / 热记忆 / 分布式锁 / Task Queue
+#
+# 使用方式:
+#   docker compose -f docker/docker-compose.yml up -d
+#   docker compose -f docker/docker-compose.yml ps
+# ============================================================================
+
+services:
+  # ─── PostgreSQL + pgvector ────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: myagent-postgres
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-myagent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-myagent_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-agent_memory}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - myagent-pgdata:/var/lib/postgresql/data
+      # 初始化脚本在首次启动时自动按文件名排序执行
+      - ./postgres/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-myagent} -d ${POSTGRES_DB:-agent_memory}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - myagent-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ─── Redis 7 ──────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: myagent-redis
+    restart: unless-stopped
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    env_file:
+      - .env
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - myagent-redis-data:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - myagent-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# ─── Docker Volumes ────────────────────────────────────────────────────
+volumes:
+  myagent-pgdata:
+    driver: local
+  myagent-redis-data:
+    driver: local
+
+# ─── Docker Network ────────────────────────────────────────────────────
+networks:
+  myagent-net:
+    name: myagent-network
+    driver: bridge

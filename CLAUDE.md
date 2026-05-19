@@ -18,6 +18,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Web 框架: FastAPI + uvicorn + SSE (Server-Sent Events) + WebSocket
 - 前端: Vite + React 18 + TypeScript + Tailwind CSS + Zustand
 - 代码质量: ruff (lint+format) + mypy
+- 持久化存储: PostgreSQL 16 + pgvector（Docker）+ Redis 7（Docker）
+- 异步数据库驱动: asyncpg（连接池）+ redis.asyncio
+
+## Docker 基础设施
+
+```bash
+# 启动 PostgreSQL + Redis
+docker compose -f docker/docker-compose.yml up -d
+
+# 检查状态
+docker compose -f docker/docker-compose.yml ps
+
+# 验证全套基础设施
+uv run python scripts/verify_infra.py
+
+# 停止
+docker compose -f docker/docker-compose.yml stop
+
+# 完全重置（删除数据卷）
+docker compose -f docker/docker-compose.yml down -v
+```
 
 ## 环境变量
 
@@ -35,6 +56,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `LOG_OUTPUT` | 输出目标（`console` / `file` / `both`，默认 `console`） |
 | `LOG_DIR` | 日志目录（默认 `./logs`） |
 | `LOG_FILE_NAME` | 日志文件名（默认 `agent.log`） |
+| `PG_HOST` | PostgreSQL 主机（默认 `localhost`） |
+| `PG_PORT` | PostgreSQL 端口（默认 `5432`） |
+| `PG_USER` | PostgreSQL 用户（默认 `myagent`） |
+| `PG_PASSWORD` | PostgreSQL 密码（默认 `myagent_secret`） |
+| `PG_DATABASE` | PostgreSQL 数据库（默认 `agent_memory`） |
+| `REDIS_HOST` | Redis 主机（默认 `localhost`） |
+| `REDIS_PORT` | Redis 端口（默认 `6379`） |
+| `REDIS_DB` | Redis 数据库编号（默认 `0`） |
 
 ## 开发命令
 
@@ -142,6 +171,7 @@ src/
 │   │   ├── policies/     # 安全检查与权限策略
 │   │   └── memory/       # （空占位）
 │   ├── memory/           # 分层记忆系统（10 个子模块 + Manager Facade）
+│   │   └── stores/       # 存储后端：ChromaMemoryStore / SQLMemoryStore / PGVectorMemoryStore
 │   └── planner/          # 待实现
 scripts/
 ├── chat.py               # Agent 交互式对话（CLI）
@@ -316,7 +346,19 @@ Agent.chat()
   from src.agent.context import ContextManager, ContextType, Goal, Task
   ```
 
-### 工具系统
+### 存储后端
+
+| 后端 | 类型 | 用途 | 状态 |
+|------|------|------|------|
+| `ChromaMemoryStore` | ChromaDB（同步） | 向量存储 | 兼容保留 |
+| `SQLMemoryStore` | SQLite（同步） | 结构化记忆 | 兼容保留 |
+| `PGVectorMemoryStore` | PostgreSQL+pgvector（异步） | **统一存储（推荐）** | 新增 |
+
+**PGVectorMemoryStore** 是基于 asyncpg 连接池的异步存储后端：
+- CRUD: `asave` / `aget` / `asearch` / `adelete` / `aupdate` / `acount` / `aget_all`
+- 辅助方法: `save_session` / `save_message` / `save_summary` / `save_tool_call`
+- 使用 `<=>` 余弦距离进行向量检索，支持类型过滤：`asearch_by_type`
+- 同步方法调用会抛出 `RuntimeError`，必须使用 `await` 语法
 - 工具通过 Pydantic `args_schema` 声明参数，自动生成 OpenAI tool calling 格式
 - 能力域驱动：`system/`, `code/`, `web/`, `rag/` 各归各类
 - 所有 `_run()` 返回 `ToolOutput(success=True, output=str)` 或 `ToolOutput(success=False, error=str)`
