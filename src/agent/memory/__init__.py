@@ -22,6 +22,12 @@
 """
 
 from .manager import MemoryManager
+
+try:
+    from .async_manager import AsyncMemoryManager
+except ImportError:
+    AsyncMemoryManager = None  # type: ignore[assignment, misc]
+
 from .types import MemoryItem, MemoryInput, MemoryQuery, Episode, Reflection
 from .working import WorkingMemory
 from .episodic import EpisodicMemory
@@ -35,6 +41,7 @@ from .resolver import ConflictResolver
 
 __all__ = [
     "MemoryManager",
+    "AsyncMemoryManager",
     "MemoryItem",
     "MemoryInput",
     "MemoryQuery",

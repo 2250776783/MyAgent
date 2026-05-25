@@ -25,6 +25,11 @@ from .semantic import SemanticMemory
 from .stores.base import MemoryStore
 from .stores.chroma_store import ChromaMemoryStore
 from .stores.sql_store import SQLMemoryStore
+
+try:
+    from .stores.pgvector_store import PGVectorMemoryStore
+except ImportError:
+    PGVectorMemoryStore = None  # type: ignore[assignment, misc]
 from .types import MemoryItem, MemoryQuery
 from .working import WorkingMemory
 
@@ -51,9 +56,11 @@ class MemoryManager:
         sqlite_path: str | Path = "memory.db",
         enable_chroma: bool = True,
         enable_sqlite: bool = True,
+        enable_pgvector: bool = False,
         enable_reflection: bool = True,
         enable_decay: bool = True,
         max_working_tokens: int = 4096,
+        pg_dsn: str | None = None,
     ) -> None:
         self.llm = llm
         self.embedder = embedder
@@ -65,6 +72,7 @@ class MemoryManager:
         # 存储后端
         self.chroma_store: MemoryStore | None = None
         self.sql_store: SQLMemoryStore | None = None
+        self.pg_store: PGVectorMemoryStore | None = None
 
         if enable_chroma:
             try:
@@ -81,6 +89,15 @@ class MemoryManager:
                 logger.warning("SQLite init failed: %s", e)
 
         self._store: MemoryStore = self.chroma_store or self.sql_store
+
+        # PGVector 作为生产主存储（优先级最高）
+        if enable_pgvector and PGVectorMemoryStore is not None:
+            try:
+                self.pg_store = PGVectorMemoryStore(dsn=pg_dsn)
+                self._store = self.pg_store
+                logger.info("MemoryManager: PGVectorMemoryStore enabled")
+            except Exception as e:
+                logger.warning("PGVectorMemoryStore init failed: %s", e)
 
         # 记忆层
         self.working = WorkingMemory(max_tokens=max_working_tokens, token_counter=self.token_counter)
@@ -187,3 +204,9 @@ class MemoryManager:
     def close(self) -> None:
         if self.sql_store:
             self.sql_store.close()
+        # PG 是异步连接，同步 close 时提醒
+        if self.pg_store and self.pg_store._connected:
+            logger.warning(
+                "PGVectorMemoryStore pool still open. "
+                "Call await store.aclose() for async cleanup"
+            )

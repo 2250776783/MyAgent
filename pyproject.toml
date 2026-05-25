@@ -55,10 +55,15 @@ explicit_package_bases = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+asyncio_mode = "auto"
+
+[tool.pytest.ini_options.markers]
+asyncio = "asyncio: async test marker"
 
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
+    "pytest-asyncio>=0.25.0",
     "ruff>=0.6.0",
     "mypy>=1.11.0",
 ]

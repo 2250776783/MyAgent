@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 个人问答助手项目，目标是通过实践学习 **RAG** 和 **Agent** 相关知识。
 
-**当前状态**: 核心功能已实现。Agent Context System + 分层记忆系统 + 企业级日志系统已全部完成，规划模块 (`src/agent/planner/`) 仍为待实现。共 140+ 个测试（15 个测试文件）。
+**当前状态**: 核心功能已实现。Agent Context System + 分层记忆系统 + 企业级日志系统已全部完成。
+生产级记忆数据库系统（PostgreSQL 16 + pgvector + Redis 7）已就绪，规划模块 (`src/agent/planner/`) 仍为待实现。
+共 170+ 个测试（17 个测试文件）。
 
 ## 技术栈
 
@@ -33,11 +35,117 @@ docker compose ps
 # 验证全套基础设施
 uv run python scripts/verify_infra.py
 
+# 查看数据库表
+docker compose exec postgres psql -U myagent -d agent_memory -c "\dt"
+
+# 查看向量索引
+docker compose exec postgres psql -U myagent -d agent_memory -c "\di"
+
+# 测试记忆检索（需要 Docker 运行中）
+# PG 集成测试（标记跳过，需要手动移除 skipif 或启动 Docker）
+uv run pytest tests/test_agent/test_memory_pg.py -v
+
+# Redis 集成测试
+uv run pytest tests/test_agent/test_memory_redis.py -v
+
 # 停止
 docker compose stop
 
 # 完全重置（删除数据卷）
 docker compose down -v
+```
+
+## 生产级记忆数据库系统
+
+PostgreSQL 16 + pgvector + Redis 7 驱动的 Agent 长期记忆系统。
+
+### 数据流架构
+
+```
+用户输入
+  → on_chat_start()
+    → RedisCache.get_hot_memories()   # 快路径: 热缓存(~5ms)
+    → MemoryRetriever.retrieve()      # 慢路径: PG向量检索(~50ms)
+    → RedisCache.set_hot_memories()   # 更新缓存
+    → PromptInjector.inject_memory()  # 注入到 system prompt
+  → AsyncAgent ReAct 循环
+    → PGVectorMemoryStore.save_tool_call()  # 记录工具轨迹
+  → on_chat_end()
+    → EpisodicMemory.store_session()  # PG 持久化
+    → SemanticMemory.extract()        # 实体提取
+    → ReflectionSystem.run()          # 定期反思
+    → PGVectorMemoryStore.adecay()    # 遗忘衰减
+    → RedisCache.delete_memory_cache()# 缓存失效
+```
+
+### 存储分层
+
+| 层级 | 存储 | 延迟 | TTL | 用途 |
+|------|------|------|-----|------|
+| L1: 热记忆 | Redis | <5ms | 15min | 高频访问记忆 |
+| L2: 最近 | Redis | <5ms | 5min | 当前会话记忆 |
+| L3: 持久化 | PostgreSQL | ~50ms | ∞ | 长期记忆 |
+| L4: 摘要 | PostgreSQL | ~50ms | ∞ | 压缩的历史 |
+| L5: 图谱 | PostgreSQL | ~100ms | ∞ | 记忆关系 |
+
+### 核心 API
+
+```python
+# 方式 1: 同步 MemoryManager（兼容现有代码）
+from src.agent.memory import MemoryManager
+memory = MemoryManager(llm=llm, embedder=embedder, enable_pgvector=True)
+memory.start_session()
+memory.on_chat_start("用户输入")
+memory.on_chat_end(messages)
+
+# 方式 2: 异步 AsyncMemoryManager（推荐，配合 AsyncAgent）
+from src.agent.memory import AsyncMemoryManager
+manager = AsyncMemoryManager(llm=llm, embedder=embedder)
+await manager.start()
+await manager.start_session()
+context = await manager.on_chat_start("用户输入")
+await manager.on_chat_end(messages)
+await manager.stop()
+
+# 方式 3: 直接使用 PGVectorMemoryStore
+from src.agent.memory.stores import PGVectorMemoryStore
+store = PGVectorMemoryStore()
+await store.connect()
+mid = await store.asave(item)
+results = await store.asearch(embedding, k=10)
+await store.aclose()
+```
+
+### 表结构
+
+| 表 | 用途 | 核心字段 |
+|----|------|---------|
+| `users` | 用户信息 | external_id, preferences(JSONB) |
+| `sessions` | 会话管理 | status, agent_id, session_data(JSONB) |
+| `messages` | 原始聊天记录 | message_index, role, tool_calls(JSONB), reasoning |
+| `conversation_summary` | 会话摘要 | summary_text, message_start/end, VECTOR(1536) |
+| `long_term_memory` | **长期记忆（核心）** | memory_type, importance_score, confidence_score, decay_factor, VECTOR(1536) |
+| `knowledge_cache` | RAG 检索缓存 | query_hash(SHA256), VECTOR(1536), expires_at |
+| `tasks` | Agent 长期任务 | parent_task_id, status, priority |
+| `tool_calls` | 工具调用记录 | tool_name, retry_count, duration_ms |
+| `memory_links` | 记忆关系图谱 | source_id, target_id, relation_type, strength |
+| `agent_states` | Agent 状态持久化 | state_type, state_data(JSONB) |
+
+### 向量检索索引
+
+```sql
+-- long_term_memory 使用 IVFFLAT + 余弦距离
+CREATE INDEX idx_memory_embedding ON long_term_memory
+    USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+
+-- 检索前设置 probes 平衡速度/精度
+SET ivfflat.probes = 10;  -- <1K:1, 1K-10K:10, 10K-100K:20, 100K+:50
+
+-- 语义检索
+SELECT * FROM long_term_memory
+WHERE user_id = $1 AND importance_score > 0.3
+ORDER BY embedding <=> $query_vector
+LIMIT 10;
 ```
 
 ## 环境变量
@@ -89,6 +197,15 @@ uv run pytest tests/test_logging/ -v
 
 # 运行日志系统测试（含覆盖率）
 uv run pytest tests/test_logging/ --cov=src/logging --cov-report=term-missing -v
+
+# 运行 PG 存储集成测试（需 Docker 运行中）
+uv run pytest tests/test_agent/test_memory_pg.py -v
+
+# 运行 Redis 缓存集成测试（需 Docker 运行中）
+uv run pytest tests/test_agent/test_memory_redis.py -v
+
+# 验证数据库表结构
+docker compose exec postgres psql -U myagent -d agent_memory -c "\dt+"
 
 # 运行单测（不捕获输出，便于调试）
 uv run pytest tests/test_agent/test_agent.py -v -s

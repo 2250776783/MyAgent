@@ -17,9 +17,15 @@ try:
 except ImportError:
     PGVectorMemoryStore = None  # type: ignore[assignment,misc]
 
+try:
+    from .redis_cache import RedisCache
+except ImportError:
+    RedisCache = None  # type: ignore[assignment,misc]
+
 __all__ = [
     "MemoryStore",
     "ChromaMemoryStore",
     "SQLMemoryStore",
     "PGVectorMemoryStore",
+    "RedisCache",
 ]
