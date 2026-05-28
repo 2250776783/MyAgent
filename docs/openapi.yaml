@@ -1,0 +1,2239 @@
+openapi: "3.0.3"
+info:
+  title: MyAgent API
+  description: |
+    AI Agent 管理平台后端 API。
+
+    ## 认证方式
+
+    除健康检查和认证端点外，所有 API 请求需在 `Authorization` 头携带 Bearer token：
+
+    ```
+    Authorization: Bearer <access_token>
+    ```
+
+    Token 通过 `/api/auth/login` 或 `/api/auth/register` 获取。
+
+    ## 通用响应格式
+
+    所有标准 API 响应遵循统一信封格式：
+    - 成功：`{ "success": true, "data": T, "meta?": { total, page, limit } }`
+    - 失败：`{ "success": false, "error": string, "message": string }`
+
+    错误 HTTP 状态码对照表：
+
+    | 状态码 | 含义 | 前端行为 |
+    |--------|------|---------|
+    | 401 | 未认证 / Token 过期 | 拦截器自动尝试 refresh token |
+    | 403 | 无权限 | 跳转 403 页面 |
+    | 404 | 资源不存在 | 显示 404 |
+    | 409 | 资源冲突 | 提示用户 |
+    | 422 | 参数校验失败 | 显示字段级错误 |
+    | 500 | 服务器内部错误 | 显示通用错误页 |
+  version: "0.2.0"
+  contact:
+    name: MyAgent Team
+
+servers:
+  - url: http://localhost:8000
+    description: 本地开发服务器
+  - url: http://localhost:3000
+    description: 前端 Next.js 开发服务器（通过代理转发）
+
+paths:
+  # ============================================================================
+  # Auth
+  # ============================================================================
+  /api/auth/register:
+    post:
+      tags: [认证]
+      summary: 用户注册
+      description: 注册新用户，成功后返回 JWT token 对和用户信息（自动登录）。
+      operationId: registerUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: 注册成功，返回 token 和用户信息
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "409":
+          description: 邮箱已被注册
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error409"
+        "422":
+          description: 参数校验失败
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error422"
+
+  /api/auth/login:
+    post:
+      tags: [认证]
+      summary: 用户登录
+      description: 使用邮箱和密码登录，返回 JWT token 对和用户信息。
+      operationId: loginUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: 邮箱或密码错误 / 账户被禁用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error401"
+
+  /api/auth/logout:
+    post:
+      tags: [认证]
+      summary: 登出
+      description: 登出当前用户（客户端清除 token，服务端不做额外操作）。
+      operationId: logoutUser
+      responses:
+        "200":
+          description: 登出成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /api/auth/refresh:
+    post:
+      tags: [认证]
+      summary: 刷新 Token
+      description: 使用 refresh_token 获取新的 access_token 和 refresh_token。
+      operationId: refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenRefreshRequest"
+      responses:
+        "200":
+          description: Token 刷新成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenRefreshResponse"
+        "401":
+          description: refresh_token 无效或已过期
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error401"
+
+  /api/auth/profile:
+    get:
+      tags: [认证]
+      summary: 获取个人信息
+      description: 获取当前登录用户的详细信息。
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: 用户信息
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+
+  /api/auth/password:
+    put:
+      tags: [认证]
+      summary: 修改密码
+      description: 修改当前登录用户的密码。
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordChangeRequest"
+      responses:
+        "200":
+          description: 密码修改成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: 原密码错误或新密码不符合要求
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error400"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+
+  # ============================================================================
+  # Health
+  # ============================================================================
+  /api/health:
+    get:
+      tags: [系统]
+      summary: 健康检查
+      description: 服务健康检查端点。
+      operationId: healthCheck
+      responses:
+        "200":
+          description: 服务正常
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  # ============================================================================
+  # Chat
+  # ============================================================================
+  /api/chat:
+    post:
+      tags: [聊天]
+      summary: 非流式聊天
+      description: 发送消息给 Agent，返回完整回复（非流式）。
+      operationId: chatSync
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+      responses:
+        "200":
+          description: 聊天回复
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResponse"
+        "500":
+          description: Agent 内部错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error500"
+
+  /api/chat/stream:
+    post:
+      tags: [聊天]
+      summary: SSE 流式聊天
+      description: 发送消息给 Agent，通过 Server-Sent Events 流式推送回复文本块。
+      operationId: chatStream
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+      responses:
+        "200":
+          description: SSE 事件流
+          content:
+            text/event-stream:
+              schema:
+                type: object
+                properties:
+                  event:
+                    type: string
+                    enum: [token, done, error]
+                    description: 事件类型
+                  data:
+                    type: string
+                    description: |
+                      - `token` 事件：回复文本块
+                      - `done` 事件：session_id
+                      - `error` 事件：错误信息
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/ws/chat:
+    get:
+      tags: [聊天]
+      summary: WebSocket 实时聊天
+      description: |
+        WebSocket 端点，支持双向流式通信。
+
+        **请求格式:**
+        ```json
+        {"message": "你好", "session_id": "可选"}
+        ```
+
+        **响应事件:**
+
+        | 事件类型 | data 字段 | 说明 |
+        |----------|-----------|------|
+        | token | {"text": "..."} | 文本块 |
+        | tool_call | {"id", "name", "args"} | 工具调用 |
+        | tool_result | {"name", "output"} | 工具结果 |
+        | done | {"session_id": "..."} | 完成 |
+        | error | {"message": "..."} | 错误 |
+      operationId: chatWebSocket
+      responses:
+        "101":
+          description: WebSocket 协议升级
+        "400":
+          description: 无效请求
+
+  # ============================================================================
+  # Sessions
+  # ============================================================================
+  /api/sessions:
+    get:
+      tags: [会话]
+      summary: 会话列表
+      description: 获取当前活跃的 session 列表。
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: 会话列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SessionSummary"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+
+  /api/sessions/{session_id}:
+    get:
+      tags: [会话]
+      summary: 会话详情
+      description: 获取指定 session 的详细信息。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: 会话信息
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionInfo"
+        "404":
+          description: 会话不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error404"
+
+    delete:
+      tags: [会话]
+      summary: 删除会话
+      description: 删除指定 session。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: 删除成功（无内容）
+        "404":
+          description: 会话不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error404"
+
+  /api/sessions/{session_id}/messages:
+    get:
+      tags: [会话]
+      summary: 会话消息历史
+      description: 获取指定 session 的消息历史。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: 消息列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  messages:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ChatMessage"
+        "404":
+          description: 会话不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error404"
+
+  # ============================================================================
+  # Agents
+  # ============================================================================
+  /agents:
+    get:
+      tags: [Agent 管理]
+      summary: Agent 列表
+      description: 获取 Agent 列表，支持分页和搜索。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+          description: 页码
+        - name: search
+          in: query
+          schema:
+            type: string
+          description: 搜索关键词（匹配名称和描述）
+      responses:
+        "200":
+          description: Agent 列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessWithData"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Agent"
+                      total:
+                        type: integer
+                        example: 42
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+
+    post:
+      tags: [Agent 管理]
+      summary: 创建 Agent
+      description: 创建一个新的 Agent。
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentCreateRequest"
+      responses:
+        "201":
+          description: Agent 创建成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/Agent"
+        "422":
+          description: 参数校验失败
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error422"
+
+  /agents/{id}:
+    get:
+      tags: [Agent 管理]
+      summary: Agent 详情
+      description: 获取指定 Agent 的详细信息。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Agent 详情
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/Agent"
+        "404":
+          description: Agent 不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error404"
+
+    put:
+      tags: [Agent 管理]
+      summary: 更新 Agent
+      description: 更新指定 Agent 的配置。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentUpdateRequest"
+      responses:
+        "200":
+          description: Agent 更新成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/Agent"
+        "404":
+          description: Agent 不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error404"
+
+    delete:
+      tags: [Agent 管理]
+      summary: 删除 Agent
+      description: 删除指定 Agent。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: 删除成功（无内容）
+        "404":
+          description: Agent 不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error404"
+
+  # ============================================================================
+  # Knowledge
+  # ============================================================================
+  /knowledge/files:
+    get:
+      tags: [知识库]
+      summary: 知识文档列表
+      description: 获取知识库中所有文档的列表。
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: 文档列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/KnowledgeDocument"
+
+    post:
+      tags: [知识库]
+      summary: 上传知识文档
+      description: 上传文件到知识库（multipart/form-data）。
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: 要上传的文件
+              required:
+                - file
+      responses:
+        "201":
+          description: 上传成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/KnowledgeDocument"
+        "413":
+          description: 文件过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error413"
+
+  /knowledge/files/{id}:
+    delete:
+      tags: [知识库]
+      summary: 删除知识文档
+      description: 删除指定知识文档及其向量索引。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: 删除成功（无内容）
+        "404":
+          description: 文档不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error404"
+
+  /knowledge/search:
+    post:
+      tags: [知识库]
+      summary: 语义搜索
+      description: 对知识库进行语义搜索。
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query:
+                  type: string
+                  description: 搜索查询
+                limit:
+                  type: integer
+                  default: 10
+                  minimum: 1
+                  maximum: 100
+              required:
+                - query
+      responses:
+        "200":
+          description: 搜索结果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SearchResult"
+
+  # ============================================================================
+  # Memory
+  # ============================================================================
+  /memory:
+    get:
+      tags: [记忆]
+      summary: 记忆列表
+      description: 获取当前用户的记忆列表，支持分页。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+          description: 页码
+        - name: type
+          in: query
+          schema:
+            $ref: "#/components/schemas/MemoryType"
+          description: 按记忆类型筛选
+      responses:
+        "200":
+          description: 记忆列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Memory"
+
+  /memory/search:
+    post:
+      tags: [记忆]
+      summary: 语义搜索记忆
+      description: 对记忆进行语义搜索。
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MemorySearchRequest"
+      responses:
+        "200":
+          description: 搜索结果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Memory"
+
+  /memory/{id}:
+    delete:
+      tags: [记忆]
+      summary: 删除记忆
+      description: 删除指定记忆条目。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: 删除成功（无内容）
+        "404":
+          description: 记忆不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error404"
+
+  # ============================================================================
+  # Workflows
+  # ============================================================================
+  /workflows:
+    get:
+      tags: [工作流]
+      summary: 工作流列表
+      description: 获取所有工作流列表。
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: 工作流列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Workflow"
+
+    post:
+      tags: [工作流]
+      summary: 创建工作流
+      description: 创建一个新的工作流。
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkflowCreateRequest"
+      responses:
+        "201":
+          description: 工作流创建成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/Workflow"
+
+  /workflows/{id}:
+    get:
+      tags: [工作流]
+      summary: 工作流详情
+      description: 获取指定工作流的详细信息。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: 工作流详情
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/Workflow"
+        "404":
+          description: 工作流不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error404"
+
+    put:
+      tags: [工作流]
+      summary: 更新工作流
+      description: 更新指定工作流（含 React Flow 格式的 nodes/edges）。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkflowUpdateRequest"
+      responses:
+        "200":
+          description: 工作流更新成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/Workflow"
+        "404":
+          description: 工作流不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error404"
+
+    delete:
+      tags: [工作流]
+      summary: 删除工作流
+      description: 删除指定工作流。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: 删除成功（无内容）
+        "404":
+          description: 工作流不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error404"
+
+  # ============================================================================
+  # Tools
+  # ============================================================================
+  /tools:
+    get:
+      tags: [工具]
+      summary: 工具列表
+      description: 获取所有可用工具的列表。
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: 工具列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Tool"
+
+  /tools/{id}:
+    put:
+      tags: [工具]
+      summary: 更新工具
+      description: 更新工具的配置或启/禁用状态。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+                  description: 是否启用
+                config:
+                  type: object
+                  description: 工具配置
+      responses:
+        "200":
+          description: 工具更新成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/Tool"
+        "404":
+          description: 工具不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error404"
+
+  # ============================================================================
+  # Logs
+  # ============================================================================
+  /logs:
+    get:
+      tags: [日志]
+      summary: 日志列表
+      description: 获取系统日志，支持按级别、搜索、来源等条件筛选。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: level
+          in: query
+          schema:
+            type: string
+            enum: [DEBUG, INFO, WARN, ERROR]
+          description: 日志级别
+        - name: search
+          in: query
+          schema:
+            type: string
+          description: 搜索关键词（匹配消息内容）
+        - name: source
+          in: query
+          schema:
+            type: string
+          description: 日志来源
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+          description: 页码
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
+          description: 每页数量
+      responses:
+        "200":
+          description: 日志列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/LogEntry"
+                  meta:
+                    $ref: "#/components/schemas/PaginationMeta"
+
+  # ============================================================================
+  # Admin
+  # ============================================================================
+  /admin/users:
+    get:
+      tags: [管理后台]
+      summary: 用户列表（管理）
+      description: 获取所有用户列表（仅管理员）。
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: 用户列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AdminUser"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+
+  /admin/users/{id}:
+    put:
+      tags: [管理后台]
+      summary: 更新用户（管理）
+      description: 管理员更新用户角色或状态。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role:
+                  type: string
+                  enum: [USER, ADMIN]
+                  description: 用户角色
+                is_active:
+                  type: boolean
+                  description: 是否激活
+      responses:
+        "200":
+          description: 用户更新成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          description: 用户不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error404"
+
+    delete:
+      tags: [管理后台]
+      summary: 删除用户（管理）
+      description: 管理员删除用户。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: 删除成功（无内容）
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          description: 用户不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error404"
+
+  /admin/system:
+    get:
+      tags: [管理后台]
+      summary: 系统指标
+      description: 获取系统运行指标（仅管理员）。
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: 系统指标
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/SystemMetrics"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+
+    put:
+      tags: [管理后台]
+      summary: 更新系统配置
+      description: 更新系统级配置（仅管理员）。
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: 系统配置键值对
+              example:
+                max_upload_size_mb: 50
+                allow_registration: true
+      responses:
+        "200":
+          description: 配置更新成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+
+  # ============================================================================
+  # Settings
+  # ============================================================================
+  /settings:
+    get:
+      tags: [设置]
+      summary: 获取设置
+      description: 获取当前用户的个人设置。
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: 用户设置
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  theme:
+                    type: string
+                    enum: [light, dark, system]
+                    example: system
+                  language:
+                    type: string
+                    example: zh-CN
+                  notifications:
+                    type: boolean
+                    example: true
+
+    put:
+      tags: [设置]
+      summary: 更新设置
+      description: 更新当前用户的个人设置。
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                theme:
+                  type: string
+                  enum: [light, dark, system]
+                language:
+                  type: string
+                notifications:
+                  type: boolean
+      responses:
+        "200":
+          description: 设置更新成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  # ============================================================================
+  # Dashboard
+  # ============================================================================
+  /dashboard/overview:
+    get:
+      tags: [仪表盘]
+      summary: 总览数据
+      description: 获取仪表盘总览数据。
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: 总览数据
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_messages:
+                    type: integer
+                    example: 1523
+                  total_sessions:
+                    type: integer
+                    example: 89
+                  total_agents:
+                    type: integer
+                    example: 12
+                  avg_response_time:
+                    type: number
+                    format: float
+                    example: 1.25
+                    description: 平均响应时间（秒）
+
+  /dashboard/recent-chats:
+    get:
+      tags: [仪表盘]
+      summary: 最近聊天
+      description: 获取最近的聊天记录。
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: 最近聊天列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    title:
+                      type: string
+                    message_count:
+                      type: integer
+                    created_at:
+                      type: string
+                      format: date-time
+
+  /dashboard/recent-agents:
+    get:
+      tags: [仪表盘]
+      summary: 最近 Agent
+      description: 获取最近使用的 Agent 列表。
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: 最近 Agent 列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    name:
+                      type: string
+                    description:
+                      type: string
+                    status:
+                      $ref: "#/components/schemas/AgentStatus"
+                    updated_at:
+                      type: string
+                      format: date-time
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT Bearer token，通过登录或注册获取
+
+  schemas:
+    # ── 通用 ────────────────────────────────────────────────────
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: 操作成功
+
+    SuccessWithData:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data: {}
+
+    PaginationMeta:
+      type: object
+      properties:
+        total:
+          type: integer
+          example: 100
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 20
+
+    # ── 错误 ────────────────────────────────────────────────────
+    Error400:
+      type: object
+      properties:
+        detail:
+          type: string
+          example: 原密码错误
+
+    Error401:
+      type: object
+      properties:
+        detail:
+          type: string
+          example: 邮箱或密码错误
+
+    Error403:
+      type: object
+      properties:
+        detail:
+          type: string
+          example: 无权限
+
+    Error404:
+      type: object
+      properties:
+        detail:
+          type: string
+          example: 资源不存在
+
+    Error409:
+      type: object
+      properties:
+        detail:
+          type: string
+          example: 该邮箱已被注册
+
+    Error413:
+      type: object
+      properties:
+        detail:
+          type: string
+          example: 文件大小超过限制
+
+    Error422:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              loc:
+                type: array
+                items:
+                  type: string
+                example: ["body", "email"]
+              msg:
+                type: string
+                example: Value error, 邮箱格式不正确
+              type:
+                type: string
+                example: value_error
+
+    Error500:
+      type: object
+      properties:
+        detail:
+          type: string
+          example: Internal server error
+
+    # ── Auth ────────────────────────────────────────────────────
+    RegisterRequest:
+      type: object
+      required:
+        - username
+        - email
+        - password
+      properties:
+        username:
+          type: string
+          minLength: 2
+          maxLength: 50
+          description: 用户名
+          example: 张三
+        email:
+          type: string
+          format: email
+          description: 邮箱
+          example: zhangsan@example.com
+        password:
+          type: string
+          minLength: 6
+          description: 密码
+          example: password123
+
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          example: zhangsan@example.com
+        password:
+          type: string
+          example: password123
+
+    TokenRefreshRequest:
+      type: object
+      required:
+        - refresh_token
+      properties:
+        refresh_token:
+          type: string
+          description: 刷新令牌
+
+    TokenRefreshResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+          description: 新的 access_token
+        refresh_token:
+          type: string
+          description: 新的 refresh_token
+
+    PasswordChangeRequest:
+      type: object
+      required:
+        - old_password
+        - new_password
+      properties:
+        old_password:
+          type: string
+          description: 原密码
+        new_password:
+          type: string
+          minLength: 6
+          description: 新密码
+
+    UserResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 550e8400-e29b-41d4-a716-446655440000
+        username:
+          type: string
+          example: 张三
+        email:
+          type: string
+          example: zhangsan@example.com
+        avatar:
+          type: string
+          default: ""
+          example: https://example.com/avatar.png
+        role:
+          type: string
+          enum: [USER, ADMIN]
+          example: USER
+        is_active:
+          type: boolean
+          default: true
+        created_at:
+          type: string
+          format: date-time
+
+    AuthResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+          description: JWT access_token（有效期 24 小时）
+          example: eyJhbGciOiJIUzI1NiIs...
+        refresh_token:
+          type: string
+          description: JWT refresh_token（有效期 7 天）
+          example: eyJhbGciOiJIUzI1NiIs...
+        user:
+          $ref: "#/components/schemas/UserResponse"
+
+    # ── Chat ────────────────────────────────────────────────────
+    ChatRequest:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          description: 用户消息
+          example: 你好，今天天气怎么样？
+        session_id:
+          type: string
+          format: uuid
+          description: 会话 ID（可选，不传则创建新会话）
+
+    ChatResponse:
+      type: object
+      properties:
+        session_id:
+          type: string
+          format: uuid
+          description: 会话 ID
+        content:
+          type: string
+          description: Agent 回复内容
+
+    ChatMessage:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [user, assistant, system]
+        content:
+          type: string
+        tool_calls:
+          type: array
+          items:
+            $ref: "#/components/schemas/ToolCallInfo"
+        token_usage:
+          type: object
+          properties:
+            prompt:
+              type: integer
+            completion:
+              type: integer
+            total:
+              type: integer
+        is_streaming:
+          type: boolean
+        thinking:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    ToolCallInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        args:
+          type: string
+        output:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, completed, error]
+
+    # ── Sessions ────────────────────────────────────────────────
+    SessionSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        message_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    SessionInfo:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+
+    # ── Agent ───────────────────────────────────────────────────
+    AgentStatus:
+      type: string
+      enum: [active, inactive, error, deploying]
+      example: active
+
+    ModelProvider:
+      type: string
+      enum: [openai, deepseek, claude, custom]
+      example: deepseek
+
+    Agent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: 智能助手
+        description:
+          type: string
+          example: 一个通用的 AI 助手
+        avatar:
+          type: string
+          example: https://example.com/avatar.png
+        model:
+          type: string
+          example: deepseek-v4-flash
+        provider:
+          $ref: "#/components/schemas/ModelProvider"
+        temperature:
+          type: number
+          format: float
+          example: 0.7
+        max_tokens:
+          type: integer
+          example: 4096
+        top_p:
+          type: number
+          format: float
+          example: 0.9
+        system_prompt:
+          type: string
+          example: 你是一个有帮助的助手
+        tools:
+          type: array
+          items:
+            type: string
+          example: ["web_search", "calculator"]
+        memory_enabled:
+          type: boolean
+          example: true
+        knowledge_base_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          example: []
+        status:
+          $ref: "#/components/schemas/AgentStatus"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        user_id:
+          type: string
+          format: uuid
+
+    AgentCreateRequest:
+      type: object
+      required:
+        - name
+        - model
+        - provider
+      properties:
+        name:
+          type: string
+          example: 智能助手
+        description:
+          type: string
+          example: 一个通用的 AI 助手
+        model:
+          type: string
+          example: deepseek-v4-flash
+        provider:
+          $ref: "#/components/schemas/ModelProvider"
+        temperature:
+          type: number
+          format: float
+          default: 0.7
+        max_tokens:
+          type: integer
+          default: 4096
+        top_p:
+          type: number
+          format: float
+          default: 0.9
+        system_prompt:
+          type: string
+          default: ""
+        tools:
+          type: array
+          items:
+            type: string
+          default: []
+        memory_enabled:
+          type: boolean
+          default: true
+        knowledge_base_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          default: []
+
+    AgentUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        model:
+          type: string
+        provider:
+          $ref: "#/components/schemas/ModelProvider"
+        temperature:
+          type: number
+          format: float
+        max_tokens:
+          type: integer
+        top_p:
+          type: number
+          format: float
+        system_prompt:
+          type: string
+        tools:
+          type: array
+          items:
+            type: string
+        memory_enabled:
+          type: boolean
+        knowledge_base_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        status:
+          $ref: "#/components/schemas/AgentStatus"
+
+    # ── Knowledge ───────────────────────────────────────────────
+    DocumentStatus:
+      type: string
+      enum: [pending, indexing, indexed, failed]
+      example: indexed
+
+    KnowledgeDocument:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        filename:
+          type: string
+          example: 使用手册.pdf
+        file_type:
+          type: string
+          example: application/pdf
+        file_size:
+          type: integer
+          description: 文件大小（字节）
+          example: 1048576
+        chunk_count:
+          type: integer
+          example: 42
+        status:
+          $ref: "#/components/schemas/DocumentStatus"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    SearchResult:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        content:
+          type: string
+          description: 匹配的文本内容
+        score:
+          type: number
+          format: float
+          description: 相似度评分（0-1）
+        document_id:
+          type: string
+          format: uuid
+        document_name:
+          type: string
+          description: 来源文档名称
+
+    # ── Memory ─────────────────────────────────────────────────
+    MemoryType:
+      type: string
+      enum: [episodic, semantic, procedural]
+      description: |
+        - episodic: 情景记忆（特定事件/经历）
+        - semantic: 语义记忆（知识/概念/偏好）
+        - procedural: 程序记忆（操作流程/技能）
+
+    Memory:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          $ref: "#/components/schemas/MemoryType"
+        content:
+          type: string
+          description: 记忆内容
+          example: 用户偏好函数式编程，对 Python 的装饰器模式有深入了解
+        importance_score:
+          type: number
+          format: float
+          example: 0.85
+        confidence_score:
+          type: number
+          format: float
+          example: 0.9
+        tags:
+          type: array
+          items:
+            type: string
+          example: ["python", "编程偏好"]
+        source:
+          type: string
+          description: 记忆来源（会话 ID 或系统来源）
+        created_at:
+          type: string
+          format: date-time
+        accessed_at:
+          type: string
+          format: date-time
+
+    MemorySearchRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+          description: 搜索查询
+          example: 用户的编程偏好
+        type:
+          $ref: "#/components/schemas/MemoryType"
+        limit:
+          type: integer
+          default: 10
+          maximum: 50
+        min_importance:
+          type: number
+          format: float
+          default: 0.0
+          description: 最低重要性评分
+
+    # ── Workflow ───────────────────────────────────────────────
+    WorkflowNode:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [llm, tool, knowledge, code, input, output, condition]
+        position:
+          type: object
+          properties:
+            x:
+              type: number
+            y:
+              type: number
+        data:
+          type: object
+          properties:
+            label:
+              type: string
+            config:
+              type: object
+          description: React Flow node data
+
+    WorkflowEdge:
+      type: object
+      properties:
+        id:
+          type: string
+        source:
+          type: string
+        target:
+          type: string
+        sourceHandle:
+          type: string
+        targetHandle:
+          type: string
+        animated:
+          type: boolean
+          default: false
+
+    Workflow:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: 文档摘要工作流
+        description:
+          type: string
+          example: 自动提取文档摘要并生成报告
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkflowNode"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkflowEdge"
+        is_active:
+          type: boolean
+          default: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    WorkflowCreateRequest:
+      type: object
+      required:
+        - name
+        - nodes
+        - edges
+      properties:
+        name:
+          type: string
+          example: 文档摘要工作流
+        description:
+          type: string
+          example: 自动提取文档摘要并生成报告
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkflowNode"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkflowEdge"
+
+    WorkflowUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkflowNode"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkflowEdge"
+        is_active:
+          type: boolean
+
+    # ── Tool ───────────────────────────────────────────────────
+    Tool:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: web_search
+        description:
+          type: string
+          example: 网络搜索工具，用于搜索最新信息
+        icon:
+          type: string
+          example: Search
+        category:
+          type: string
+          example: web
+        enabled:
+          type: boolean
+          default: true
+        config:
+          type: object
+          description: 工具配置
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    # ── Log ────────────────────────────────────────────────────
+    LogEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        level:
+          type: string
+          enum: [DEBUG, INFO, WARN, ERROR]
+        message:
+          type: string
+        source:
+          type: string
+          example: agent.chat
+        trace_id:
+          type: string
+        details:
+          type: object
+          description: 扩展详情
+
+    # ── Admin ───────────────────────────────────────────────────
+    AdminUser:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+          enum: [USER, ADMIN]
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        last_login:
+          type: string
+          format: date-time
+        session_count:
+          type: integer
+          example: 12
+
+    SystemMetrics:
+      type: object
+      properties:
+        total_users:
+          type: integer
+          example: 156
+        active_sessions:
+          type: integer
+          example: 23
+        total_agents:
+          type: integer
+          example: 12
+        total_messages:
+          type: integer
+          example: 8921
+        api_calls_today:
+          type: integer
+          example: 342
+        tokens_used_today:
+          type: integer
+          example: 154321
+        system_uptime:
+          type: string
+          example: 7天 12小时 34分
+        cpu_usage:
+          type: number
+          format: float
+          example: 45.2
+        memory_usage:
+          type: number
+          format: float
+          example: 62.8
+
+  responses:
+    UnauthorizedError:
+      description: 未认证或 Token 过期
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error401"
+
+    ForbiddenError:
+      description: 无权限
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error403"
+
+    NotFoundError:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error404"
+
+    InternalError:
+      description: 服务器内部错误
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error500"
+
+  # ── WebSocket 扩展 ───────────────────────────────────────────
+  x-webhooks:
+    wsChat:
+      post:
+        summary: WebSocket Chat
+        description: WebSocket 端点的连接说明（OpenAPI 3.0 无原生 WS 支持）

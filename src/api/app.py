@@ -4,17 +4,22 @@
 """
 
 import asyncio
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
-from src.api.routers import chat, health, sessions, ws
+from src.api.routers import auth, chat, health, sessions, ws
 from src.api.sessions.store import SessionStore
 from src.logging import get_default_adapter, setup_logging
 from src.logging.middleware.fastapi import LoggingMiddleware, RequestLoggingMiddleware
 
 # 在模块加载时初始化日志系统
 _adapter = setup_logging()
+
+# OpenAPI 规范文件路径
+_OPENAPI_PATH = Path(__file__).resolve().parent.parent.parent / "docs" / "openapi.yaml"
 
 
 def create_app() -> FastAPI:
@@ -23,8 +28,8 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title="MyAgent API",
-        version="0.1.0",
-        description="Web-based Agent API",
+        version="0.2.0",
+        description="AI Agent 管理平台后端 API — OpenAPI 规范见 docs/openapi.yaml",
     )
 
     app.add_middleware(
@@ -40,10 +45,16 @@ def create_app() -> FastAPI:
     app.state.session_store = SessionStore(ttl_seconds=3600)
     app.state.log_adapter = adapter
 
+    app.include_router(auth.router)
     app.include_router(health.router)
     app.include_router(chat.router)
     app.include_router(sessions.router)
     app.include_router(ws.router)
+
+    @app.get("/api/openapi.yaml", include_in_schema=False)
+    async def get_openapi_spec():
+        """返回 OpenAPI 3.0 规范文件。"""
+        return FileResponse(_OPENAPI_PATH, media_type="text/yaml")
 
     @app.on_event("startup")
     async def start_cleanup_task() -> None:

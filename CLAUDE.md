@@ -6,9 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 个人问答助手项目，目标是通过实践学习 **RAG** 和 **Agent** 相关知识。
 
-**当前状态**: 核心功能已实现。Agent Context System + 分层记忆系统 + 企业级日志系统已全部完成。
-生产级记忆数据库系统（PostgreSQL 16 + pgvector + Redis 7）已就绪，规划模块 (`src/agent/planner/`) 仍为待实现。
-共 170+ 个测试（17 个测试文件）。
+**当前状态**: 后端核心功能已实现（Agent Context System + 分层记忆系统 + 企业级日志系统）。生产级记忆数据库系统（PostgreSQL 16 + pgvector + Redis 7）已就绪。规划模块 (`src/agent/planner/`) 及前端新架构（Next.js 14 App Router）正在建设中。
+共 170+ 个测试（21 个测试文件）。
 
 ## 技术栈
 
@@ -18,7 +17,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 文档处理: unstructured + langchain-text-splitters
 - 网页搜索: SerpApi (`google-search-results`)
 - Web 框架: FastAPI + uvicorn + SSE (Server-Sent Events) + WebSocket
-- 前端: Vite + React 18 + TypeScript + Tailwind CSS + Zustand
+- 前端: Next.js 14 (App Router) + TypeScript + Tailwind CSS + shadcn/ui
+  - 旧版 Vite + React 18 前端已迁移至 `_migrate_backup/`，新架构基于 Next.js 14
 - 代码质量: ruff (lint+format) + mypy
 - 持久化存储: PostgreSQL 16 + pgvector（Docker）+ Redis 7（Docker）
 - 异步数据库驱动: asyncpg（连接池）+ redis.asyncio
@@ -314,25 +314,27 @@ tests/
 ├── test_rag/             # RAG 子模块测试（5 文件）
 ├── test_agent/           # Agent + 工具 + 记忆测试（4 文件）
 ├── test_logging/         # 日志系统测试（6 文件）
-web/                       # React 前端
-├── package.json           # Node.js 依赖
-├── vite.config.ts         # Vite 配置（含 /api 代理）
-├── tailwind.config.js
-├── src/
-│   ├── main.tsx           # 入口
-│   ├── App.tsx            # 布局（含 SessionSidebar + ChatWindow）
-│   ├── api/
-│   │   ├── ws.ts          # WebSocket 客户端
-│   │   └── client.ts      # REST 客户端（session CRUD）
-│   ├── store/chat.ts      # Zustand 状态管理
-│   ├── types/chat.ts      # 类型定义
-│   └── components/
-│       ├── ChatWindow.tsx
-│       ├── MessageList.tsx
-│       ├── MessageBubble.tsx
-│       ├── ToolCallCard.tsx
-│       ├── InputBar.tsx
-│       └── SessionSidebar.tsx
+web/                       # Next.js 14 前端（App Router）
+├── package.json           # Next.js 14 + shadcn/ui + zustand + tanstack-query + axios
+├── next.config.js         # /api 代理到 localhost:8000
+├── tailwind.config.ts     # shadcn CSS 变量 + class 暗黑模式
+├── components.json        # shadcn/ui 配置
+├── scripts/               # 批量生成脚本
+│   ├── generate-files.js  # 创建 types/api/stores/providers
+│   └── generate-app.js    # 创建 app 路由/中间件/布局
+└── src/
+    ├── app/               # Next.js App Router 页面
+    │   ├── layout.tsx     # 根布局（ThemeProvider + QueryProvider）
+    │   ├── (auth)/        # 认证页面组（login/register/forgot-password）
+    │   └── (dashboard)/   # 仪表盘布局（Sidebar + Header）
+    ├── components/layout/ # AppSidebar + AppHeader
+    ├── lib/               # 工具函数（cn, auth-utils, constants）
+    ├── stores/            # Zustand stores（auth-store, ui-store）
+    ├── providers/         # ThemeProvider + QueryProvider
+    ├── api/               # Axios API 层（12 个模块）
+    ├── types/             # TypeScript 类型定义（10 个模块）
+    ├── middleware.ts      # Next.js Edge Middleware（JWT 守卫 + RBAC）
+    └── globals.css        # shadcn CSS 变量 + 暗黑模式
 ```
 
 ## 关键约定
@@ -394,21 +396,60 @@ WebSocket 端点接受 JSON 消息并流式返回结构化事件：
 | `done` | `{"session_id": "..."}` | 完成 |
 | `error` | `{"message": "..."}` | 错误 |
 
-### 前端开发
+### 前端开发（Next.js 14）
 
 ```bash
 # 同时启动后端和前端（两个终端）
 # 终端 1: 后端
 uv run python scripts/serve.py
 
-# 终端 2: 前端 (Vite dev server, 代理 /api → localhost:8000)
+# 终端 2: 前端 (Next.js dev server, /api → localhost:8000)
 cd web && npm run dev
 
 # 生产构建
 cd web && npm run build
+
+# 批量生成前端 scaffold 文件（types/api/stores/providers）
+cd web && node scripts/generate-files.js
+
+# 批量生成 app 路由/中间件/布局
+cd web && node scripts/generate-app.js
 ```
 
-前端技术栈: Vite + React 18 + TypeScript + Tailwind CSS + Zustand
+前端技术栈: Next.js 14 (App Router) + TypeScript + Tailwind CSS + shadcn/ui + Zustand + TanStack Query
+Mock API 策略: `NEXT_PUBLIC_USE_MOCK=true` 时 Axios 拦截器替换为内存 mock 数据
+
+### 前端状态管理边界
+
+| 状态类型 | 工具 | 位置 |
+|---------|------|------|
+| 服务器数据 | TanStack Query | `src/api/*.ts` query keys |
+| 流式实时状态 | Zustand | `chat-store.ts`（待实现） |
+| 认证状态 | Zustand | `src/stores/auth-store.ts` |
+| UI 状态 | Zustand | `src/stores/ui-store.ts` |
+| 工作流画布 | Zustand | `workflow-store.ts`（待实现） |
+| 表单状态 | React Hook Form | 组件本地 |
+| 主题 | next-themes | localStorage |
+
+### 认证数据流
+
+Login → 后端返回 {access_token, refresh_token, user} → Zustand auth-store 存储 → localStorage 持久化 → document.cookie 同步（用于 middleware 检查）→ Axios 拦截器自动附加 Authorization header → 401 触发 refresh → 失败则登出跳转 /login
+
+### 前端模块（11 个模块，逐步实现中）
+
+| 模块 | 页面路由 | 状态 |
+|------|---------|------|
+| Dashboard | `/dashboard` | 待实现 |
+| 聊天 | `/chat` | 待实现（旧代码在 `_migrate_backup/`） |
+| Agent 管理 | `/agents/*` | 待实现 |
+| 工作流 | `/workflow/*` | 待实现 |
+| 知识库 | `/knowledge/*` | 待实现 |
+| 记忆 | `/memory` | 待实现 |
+| 工具 | `/tools` | 待实现 |
+| 日志 | `/logs` | 待实现 |
+| 设置 | `/settings` | 待实现 |
+| 管理后台 | `/admin/*` | 待实现 |
+| 认证 | `/login`, `/register`, `/forgot-password` | **已完成** |
 
 ### AsyncAgent + AsyncLLMClient (`src/agent/async_agent.py`)
 

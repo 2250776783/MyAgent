@@ -34,3 +34,14 @@ tmp/
 # Web 前端
 web/node_modules/
 web/dist/
+web/.next/
+web/*.tsbuildinfo
+
+# 根节点 node_modules（旧版前端迁移痕迹）
+node_modules/
+
+# 备份目录
+_migrate_backup/
+
+# Claude 配置
+.claude/
